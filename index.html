@@ -92,31 +92,28 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
 async function init() {
-  // Discover available layers from the directory
+  await loadManifest();
+
+  // Preload all layer images before building UI
+  const allFiles = [];
   for (const cat of CATEGORIES) {
-    const dir = `layers/${cat.id}/`;
-    layerData[cat.id] = [];
-    try {
-      // Fetch directory listing - works on most static servers
-      const resp = await fetch(dir);
-      const text = await resp.text();
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(text, 'text/html');
-      const links = doc.querySelectorAll('a[href$=".png"]');
-      links.forEach(link => {
-        const name = decodeURIComponent(link.getAttribute('href')).replace('.png', '').replace(/_/g, ' ');
-        layerData[cat.id].push({ name, file: dir + link.getAttribute('href') });
-      });
-    } catch(e) {
-      // Fallback: use known layer names from PSD extraction
+    for (const layer of (layerData[cat.id] || [])) {
+      allFiles.push(layer.file);
     }
   }
 
-  // If directory listing didn't work, use hardcoded manifest
-  if (Object.values(layerData).every(v => v.length === 0)) {
-    await loadManifest();
-  }
+  let loaded = 0;
+  const total = allFiles.length;
+  document.getElementById('export-info').textContent = `Loading assets: 0/${total}`;
 
+  await Promise.all(allFiles.map(file => new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => { loadedImages[file] = img; loaded++; document.getElementById('export-info').textContent = `Loading assets: ${loaded}/${total}`; resolve(); };
+    img.onerror = () => { loaded++; resolve(); };
+    img.src = file;
+  })));
+
+  document.getElementById('export-info').textContent = `${loaded} layers loaded!`;
   buildSidebar();
   updateStats();
   render();
@@ -171,13 +168,9 @@ function buildSidebar() {
       opt.className = 'opt' + (selections[cat.id] === layer.file ? ' selected' : '');
       opt.title = layer.name;
       opt.setAttribute('data-file', layer.file);
-      // Load thumbnail
-      const img = new Image();
-      img.onload = () => {
+      if (loadedImages[layer.file]) {
         opt.style.backgroundImage = `url(${layer.file})`;
-        loadedImages[layer.file] = img;
-      };
-      img.src = layer.file;
+      }
       opt.onclick = () => { selections[cat.id] = layer.file; updateSelection(cat.id); render(); };
       optsDiv.appendChild(opt);
     }
