@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grudge Origins - Character Builder</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }
+  h1 { text-align: center; padding: 16px; color: #c9a227; font-size: 24px; text-transform: uppercase; letter-spacing: 2px; }
+  .app { display: flex; height: calc(100vh - 60px); }
+  .sidebar { width: 280px; background: #16213e; overflow-y: auto; padding: 8px; border-right: 2px solid #0f3460; }
+  .preview { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0a0a1a; }
+  .preview canvas { border: 2px solid #0f3460; image-rendering: pixelated; background: #222244; }
+  .controls { padding: 12px; text-align: center; }
+  .controls button { padding: 8px 20px; margin: 4px; background: #c9a227; color: #1a1a2e; border: none; cursor: pointer; font-weight: bold; font-size: 14px; }
+  .controls button:hover { background: #e0c040; }
+  .category { margin-bottom: 12px; }
+  .category h3 { color: #c9a227; font-size: 13px; margin-bottom: 4px; padding: 4px; background: #0f3460; text-transform: uppercase; }
+  .options { display: flex; flex-wrap: wrap; gap: 4px; }
+  .opt { width: 48px; height: 48px; border: 2px solid #333; cursor: pointer; background-size: contain; background-repeat: no-repeat; background-position: center; background-color: #111; position: relative; }
+  .opt:hover { border-color: #c9a227; }
+  .opt.selected { border-color: #c9a227; box-shadow: 0 0 8px #c9a227; }
+  .opt.none { display: flex; align-items: center; justify-content: center; font-size: 10px; color: #666; }
+  .class-select { display: flex; gap: 8px; padding: 12px; justify-content: center; background: #16213e; border-bottom: 2px solid #0f3460; }
+  .class-btn { padding: 8px 16px; background: #0f3460; color: #e0e0e0; border: 2px solid #333; cursor: pointer; font-weight: bold; }
+  .class-btn.active { border-color: #c9a227; color: #c9a227; }
+  .stats { padding: 8px; background: #16213e; margin-top: 8px; font-size: 12px; }
+  .stats div { display: flex; justify-content: space-between; padding: 2px 4px; }
+  .stats .val { color: #c9a227; }
+  #export-info { color: #4caf50; font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1>⚔ Grudge Origins - Character Builder ⚔</h1>
+<div class="class-select">
+  <button class="class-btn active" onclick="setClass('warrior')">Warrior</button>
+  <button class="class-btn" onclick="setClass('mage')">Mage</button>
+  <button class="class-btn" onclick="setClass('ranger')">Ranger</button>
+  <button class="class-btn" onclick="setClass('worge')">Worge</button>
+</div>
+<div class="app">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="preview">
+    <canvas id="canvas" width="576" height="768"></canvas>
+    <div class="controls">
+      <button onclick="exportSpritesheet()">Export Spritesheet</button>
+      <button onclick="saveBuild()">Save Build</button>
+      <button onclick="loadBuild()">Load Build</button>
+      <button onclick="randomize()">Randomize</button>
+      <div id="export-info"></div>
+    </div>
+    <div class="stats" id="stats"></div>
+  </div>
+</div>
+
+<script>
+const CATEGORIES = [
+  { id: 'Skin_Tone', name: 'Skin', required: true },
+  { id: 'Ear', name: 'Ears' },
+  { id: 'Eyes', name: 'Eyes' },
+  { id: 'Eyebrows', name: 'Eyebrows' },
+  { id: 'Face', name: 'Face' },
+  { id: 'Hair', name: 'Hair' },
+  { id: 'Head', name: 'Headgear' },
+  { id: 'Down_Vest', name: 'Pants' },
+  { id: 'Up_Vest', name: 'Chest Armor' },
+  { id: 'Accessories', name: 'Accessories' },
+  { id: 'Equipments', name: 'Equipment' },
+  { id: 'War_Paint_and_Scars', name: 'War Paint' },
+];
+
+// Layer render order (bottom to top)
+const RENDER_ORDER = [
+  'Skin_Tone', 'Ear', 'Eyes', 'Eyebrows', 'Face',
+  'Down_Vest', 'Up_Vest', 'War_Paint_and_Scars',
+  'Accessories', 'Equipments', 'Hair', 'Head'
+];
+
+const CLASS_STATS = {
+  warrior: { hp: 150, armor: 10, damage: 14, speed: 10, mana: 20, range: 1 },
+  mage:    { hp: 80,  armor: 3,  damage: 8,  speed: 8,  mana: 100, range: 6 },
+  ranger:  { hp: 100, armor: 5,  damage: 10, speed: 13, mana: 30, range: 5 },
+  worge:   { hp: 120, armor: 7,  damage: 12, speed: 11, mana: 50, range: 2 },
+};
+
+let layerData = {};
+let selections = {};
+let loadedImages = {};
+let currentClass = 'warrior';
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+async function init() {
+  // Discover available layers from the directory
+  for (const cat of CATEGORIES) {
+    const dir = `layers/${cat.id}/`;
+    layerData[cat.id] = [];
+    try {
+      // Fetch directory listing - works on most static servers
+      const resp = await fetch(dir);
+      const text = await resp.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(text, 'text/html');
+      const links = doc.querySelectorAll('a[href$=".png"]');
+      links.forEach(link => {
+        const name = decodeURIComponent(link.getAttribute('href')).replace('.png', '').replace(/_/g, ' ');
+        layerData[cat.id].push({ name, file: dir + link.getAttribute('href') });
+      });
+    } catch(e) {
+      // Fallback: use known layer names from PSD extraction
+    }
+  }
+
+  // If directory listing didn't work, use hardcoded manifest
+  if (Object.values(layerData).every(v => v.length === 0)) {
+    await loadManifest();
+  }
+
+  buildSidebar();
+  updateStats();
+  render();
+}
+
+async function loadManifest() {
+  // Hardcoded from PSD extraction
+  const manifest = {
+    Skin_Tone: ['Black_2','Black','Pale','White','Green','Red','Green_Moss'],
+    Ear: ['Elven_Ear','Goblin_Ear','Orc_Ear'],
+    Eyes: ['Brown','Light_Green','Light_Blue','Light_Yellow','Pink_2','Pink','Dark_Brown','Red_Scaly_Yellow_Eyes'],
+    Eyebrows: ['Light_Gray','Blonde_Eyebrow','Brown','Black','Red'],
+    Face: ['Brown_Beard','Red_Beard','Blonde_Beard','Old_Beard','Black_Beard','Old_Age','Orc','Dragon_Mouth'],
+    Hair: ['Short_Blonde','Short_Red','Light_Gray_Ponytail','Blonde_Ponytail','True_Red_Ponytail','Brown_Ponytail','Black_Ponytail','Short_Brown','Short_Black','Messy_Long_Black_Hair','Messy_Long_Red_Hair','Long_Brown','Long_Black','Dark_Long_Black','Black_Spiked_Hair','Blonde_Spiked_Hair','Blue_Spiked_Hair','Curtain_Hair_Dark_Blue','Curtain_Hair_Black','Curtain_Hair_Red','Curtain_Hair_Blonde','Curtain_Hair_White'],
+    Head: ['Hood','Steel_Helmet','Steel_Helmet_2','Blue_Mage_Hood','Red_Magee_Hood','Green_Mage_Hood','Purple_Mage_Hood','Horns','Steel_Diadem','Platinum_Diadem','Gold_Diadem','Silver_Crown','Dark_Crown','Golden_Crown'],
+    Down_Vest: ['Red_Trousers','Blue_Trousers','Brown_Trousers','Plate_Pants','Rusted_Plate_Pants','Blue_Mage_Trousers','Red_Mage_Trousers','Green_Mage_Trousers','Purple_Mage_Trousers'],
+    Up_Vest: ['Simple_Brown_Robe','Simple_Dark_Brown_Clothes','Elven_Simple_Clothes','Simple_Light_Brown_Clothes','Simple_Purple_Clothes','Simple_Yellow_Clothes','Chainmail','Breastplate','Rusted_Breastplate_','Blue_Mage_Robe','Red_Mage_Robe','Green_Mage_Robe','Purple_Mage_Robe','Purple_Noble_Cloth','Blue_Noble_Cloth','Green_Noble_Cloth','Black_Noble_Cloth'],
+    Accessories: ['Green_Tabard','Yellow_Tabard','Blue_Tabard','Dark_Blue_Tabard','Red_Tabard','Lantern_Tabard_Mark','Red_Cape','Blue_Cape','Green_Cape','Purple_Cape','Body_Belt','Back_Bag','Alchemist_Front_Potions','Brown_Scarf','Red_Scarf','Blue_Scarf','Ruby_Necklace','Lantern','Glasses'],
+    Equipments: ['Shield_in_the_back','Lamp_Shield_Mark','Sheathed_Sword'],
+    War_Paint_and_Scars: ['Red_War_Paint','Purple_War_Paint','Blue_War_Paint','Bear_Scars'],
+  };
+  for (const [catId, layers] of Object.entries(manifest)) {
+    layerData[catId] = layers.map(name => ({
+      name: name.replace(/_/g, ' '),
+      file: `layers/${catId}/${name}.png`
+    }));
+  }
+  // Default selections
+  selections['Skin_Tone'] = layerData['Skin_Tone'][2].file; // Pale
+}
+
+function buildSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.innerHTML = '';
+  for (const cat of CATEGORIES) {
+    const div = document.createElement('div');
+    div.className = 'category';
+    div.innerHTML = `<h3>${cat.name}</h3><div class="options" id="opts-${cat.id}"></div>`;
+    sidebar.appendChild(div);
+    const optsDiv = div.querySelector('.options');
+
+    if (!cat.required) {
+      const none = document.createElement('div');
+      none.className = 'opt none' + (!selections[cat.id] ? ' selected' : '');
+      none.textContent = 'None';
+      none.onclick = () => { delete selections[cat.id]; updateSelection(cat.id); render(); };
+      optsDiv.appendChild(none);
+    }
+
+    for (const layer of (layerData[cat.id] || [])) {
+      const opt = document.createElement('div');
+      opt.className = 'opt' + (selections[cat.id] === layer.file ? ' selected' : '');
+      opt.title = layer.name;
+      opt.setAttribute('data-file', layer.file);
+      // Load thumbnail
+      const img = new Image();
+      img.onload = () => {
+        opt.style.backgroundImage = `url(${layer.file})`;
+        loadedImages[layer.file] = img;
+      };
+      img.src = layer.file;
+      opt.onclick = () => { selections[cat.id] = layer.file; updateSelection(cat.id); render(); };
+      optsDiv.appendChild(opt);
+    }
+  }
+}
+
+function updateSelection(catId) {
+  const opts = document.querySelectorAll(`#opts-${catId} .opt`);
+  opts.forEach(o => {
+    const file = o.getAttribute('data-file');
+    o.classList.toggle('selected', file === selections[catId] || (!file && !selections[catId]));
+  });
+}
+
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Scale up 4x for preview (144x192 -> 576x768)
+  for (const catId of RENDER_ORDER) {
+    const file = selections[catId];
+    if (file && loadedImages[file]) {
+      ctx.drawImage(loadedImages[file], 0, 0, 144, 192, 0, 0, 576, 768);
+    }
+  }
+}
+
+function setClass(cls) {
+  currentClass = cls;
+  document.querySelectorAll('.class-btn').forEach(b => b.classList.toggle('active', b.textContent.toLowerCase() === cls));
+  updateStats();
+}
+
+function updateStats() {
+  const s = CLASS_STATS[currentClass];
+  document.getElementById('stats').innerHTML = `
+    <div><span>Class:</span><span class="val">${currentClass.charAt(0).toUpperCase() + currentClass.slice(1)}</span></div>
+    <div><span>HP:</span><span class="val">${s.hp}</span></div>
+    <div><span>Armor:</span><span class="val">${s.armor}</span></div>
+    <div><span>Damage:</span><span class="val">${s.damage}</span></div>
+    <div><span>Speed:</span><span class="val">${s.speed}</span></div>
+    <div><span>Mana:</span><span class="val">${s.mana}</span></div>
+    <div><span>Range:</span><span class="val">${s.range}</span></div>
+  `;
+}
+
+function exportSpritesheet() {
+  // Export the composed character at native 144x192 resolution
+  const exportCanvas = document.createElement('canvas');
+  exportCanvas.width = 144; exportCanvas.height = 192;
+  const ectx = exportCanvas.getContext('2d');
+  for (const catId of RENDER_ORDER) {
+    const file = selections[catId];
+    if (file && loadedImages[file]) {
+      ectx.drawImage(loadedImages[file], 0, 0);
+    }
+  }
+  const link = document.createElement('a');
+  link.download = `grudge-hero-${currentClass}-${Date.now()}.png`;
+  link.href = exportCanvas.toDataURL('image/png');
+  link.click();
+  document.getElementById('export-info').textContent = 'Spritesheet exported! Place in WargusGame/graphics/units/heroes/';
+}
+
+function saveBuild() {
+  const build = { class: currentClass, selections: { ...selections } };
+  localStorage.setItem('grudge-hero-build', JSON.stringify(build));
+  document.getElementById('export-info').textContent = 'Build saved!';
+}
+
+function loadBuild() {
+  const data = localStorage.getItem('grudge-hero-build');
+  if (data) {
+    const build = JSON.parse(data);
+    currentClass = build.class || 'warrior';
+    selections = build.selections || {};
+    setClass(currentClass);
+    buildSidebar();
+    // Reload images
+    for (const file of Object.values(selections)) {
+      if (!loadedImages[file]) {
+        const img = new Image();
+        img.onload = () => { loadedImages[file] = img; render(); };
+        img.src = file;
+      }
+    }
+    render();
+    document.getElementById('export-info').textContent = 'Build loaded!';
+  }
+}
+
+function randomize() {
+  for (const cat of CATEGORIES) {
+    const options = layerData[cat.id] || [];
+    if (options.length === 0) continue;
+    if (cat.required || Math.random() > 0.3) {
+      const pick = options[Math.floor(Math.random() * options.length)];
+      selections[cat.id] = pick.file;
+    } else {
+      delete selections[cat.id];
+    }
+  }
+  buildSidebar();
+  render();
+}
+
+init();
+</script>
+</body>
+</html>
